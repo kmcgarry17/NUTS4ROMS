@@ -3,7 +3,7 @@
 # import libs
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
-import pyroms
+import xarray
 import numpy as np
 import netCDF4 as nc
 import matplotlib.cm as cm
@@ -15,16 +15,20 @@ import scipy.ndimage as si
 
 class news2roms():
 
-	def __init__(self,grdname):
-		self.grd = pyroms.grid.get_ROMS_grid(grdname)
-		self.lonmin = self.grd.hgrid.lon_rho.min() - 360.
-        	self.lonmax = self.grd.hgrid.lon_rho.max() - 360.
-        	self.latmin = self.grd.hgrid.lat_rho.min()
-        	self.latmax = self.grd.hgrid.lat_rho.max()
+	def __init__(self,grdfile):
+		grd = xarray.open_dataset(grdfile)
+		self.lon_rho = grd.lon_rho.values
+		self.lat_rho = grd.lat_rho.values
+		self.mask_rho = grd.mask_rho.values
+
+		self.lonmin = self.lon_rho.min() - 360.
+		self.lonmax = self.lon_rho.max() - 360.
+		self.latmin = self.lat_rho.min()
+		self.latmax = self.lat_rho.max()
 		return None
 
 	def setup_map(self):
-	        ''' set up the map '''
+		''' set up the map '''
 		plt.figure(figsize=[8.,8.])
 		ax = plt.axes(projection=ccrs.PlateCarree())
 		ax.set_extent([self.lonmin, self.lonmax, self.latmin, self.latmax])
@@ -39,11 +43,11 @@ class news2roms():
 
 		# phi = 90 - latitude
 		phi1 = (90.0 - lat)*degrees_to_radians
-		phi2 = (90.0 - self.grd.hgrid.lat_rho)*degrees_to_radians
+		phi2 = (90.0 - self.lat_rho)*degrees_to_radians
 
 		# theta = longitude
 		theta1 = lon*degrees_to_radians
-		theta2 = self.grd.hgrid.lon_rho*degrees_to_radians
+		theta2 = self.lon_rho*degrees_to_radians
 
 		# Compute spherical distance from spherical coordinates.
 
@@ -59,13 +63,13 @@ class news2roms():
 
 		# Remember to multiply arc by the radius of the earth
 		# in your favorite set of units to get length.
-		arc[np.where(self.grd.hgrid.mask_rho == 0)] = 1.e36
+		arc[np.where(self.mask_rho == 0)] = 1.e36
 
-		jcell,icell = np.unravel_index(arc.argmin(),self.grd.hgrid.lon_rho.shape)
+		jcell,icell = np.unravel_index(arc.argmin(),self.lon_rho.shape)
 		jcell=int(jcell)
 		icell=int(icell)
-		if self.grd.hgrid.mask_rho[jcell,icell] == 0:
-			print 'Error : cell on land'
+		if self.mask_rho[jcell,icell] == 0:
+			print('Error : cell on land')
 		if arc.min() > 0.01: # exceeded proximity threshold 0.01 * earth radius = 64km
 			jcell=0 ; icell=0
 		return jcell, icell
@@ -124,10 +128,10 @@ class news2roms():
 
 		# we want only rivers whose discharge > 10 m3/s
 		self.newsdb_domain = self.newsdb_domain[(self.newsdb_domain.Discharge > 10)]
-		print self.newsdb_domain['Discharge'][:10]
+		print(self.newsdb_domain['Discharge'][:10])
 
 		self.newsdb_domain = self.newsdb_domain.sort_values('Discharge', ascending=True)
-		print self.newsdb_domain['Discharge'][:10]
+		print(self.newsdb_domain['Discharge'][:10])
 		return None
 
 	def plot_river_mouth(self,db='global'):
@@ -158,24 +162,24 @@ class news2roms():
 
 	def create_rivers_input(self,field,river_checklist=[], plot_result=True):
 
-		rivers_input = np.zeros(self.grd.hgrid.mask_rho.shape)
+		rivers_input = np.zeros(self.mask_rho.shape)
 		nmouth_local = self.newsdb_domain['mouth_lon'].shape[0]
 
 		for kriver in np.arange(nmouth_local):
-			print ' working on ' , self.newsdb_domain['basinname'].values[kriver]
+			print( ' working on ' , self.newsdb_domain['basinname'].values[kriver])
 			if self.newsdb_domain['basinname'].values[kriver] in river_checklist:
 				self.create_one_river(rivers_input,kriver,field,rspread=10,debug=True)
 			else:
 				self.create_one_river(rivers_input,kriver,field,rspread=10)
 
-		rivers_input = rivers_input * self.grd.hgrid.mask_rho
+		rivers_input = rivers_input * self.mask_rho
 		rivers_input = np.ma.masked_values(rivers_input,0.)
 
 		if plot_result:
 			ax = self.setup_map()
-			ax.pcolormesh(self.grd.hgrid.lon_rho-360,self.grd.hgrid.lat_rho,self.grd.hgrid.mask_rho,
+			ax.pcolormesh(self.lon_rho-360,self.lat_rho,self.mask_rho,
        	                              cmap=cm.binary_r,vmin=-3,vmax=1)
-			C = ax.pcolormesh(self.grd.hgrid.lon_rho-360,self.grd.hgrid.lat_rho,rivers_input)
+			C = ax.pcolormesh(self.lon_rho-360,self.lat_rho,rivers_input)
 			plt.colorbar(C)
 			plt.show()
 		return rivers_input
@@ -186,7 +190,7 @@ class news2roms():
 		icenter = self.newsdb_domain['icell_roms'].values[kriver]
 		nutrient_value = self.newsdb_domain[field].values[kriver]
 
-		mask_river = np.zeros(self.grd.hgrid.mask_rho.shape)
+		mask_river = np.zeros(self.mask_rho.shape)
 		mask_river[jcenter,icenter] = 1
 
 		imin   = icenter - rspread
@@ -195,7 +199,7 @@ class news2roms():
 		jmax   = jcenter + rspread + 1
 
 		mask_zoom_in = mask_river[jmin:jmax,imin:imax]
-		lsm_zoom_in  = self.grd.hgrid.mask_rho[jmin:jmax,imin:imax]
+		lsm_zoom_in  = self.mask_rho[jmin:jmax,imin:imax]
 
 		if debug:
 			plt.figure()
